@@ -81,17 +81,21 @@ function openQuestions(db: OrchestrationDb, ids: readonly string[], addresses: r
   }
 }
 
+/** The message types a reply carries; anything else (a question, heartbeat, Dispatch or report)
+ *  never answers a question. */
+const ANSWER_TYPES = "('status', 'handoff')"
+
 /**
- * Point-to-point questions with no bot request behind them that the other side has not answered
- * since: read ones to the chat (unread ones count as unread), and ones it sent. An answer is any
- * later message (by `sequence`), not itself a question, from the answering side: in the question's
- * thread, or a new unthreaded message straight back between the two. Any address of the chat's
- * lineage answers for it. A recipient that never answers holds the chat until it does: an age
- * limit would end it while an answer can still arrive, and the guard would refuse that answer.
+ * Point-to-point questions with no bot request behind them and no answer yet: read ones to the
+ * chat (unread ones count as unread), and ones it sent. An answer is a reply to that question: in
+ * its thread or to its id, from the one it was asked of, back to the one who asked, newer than it,
+ * and a reply's type. Anything looser could take unrelated mail for the answer and end the chat
+ * while the real answer is still owed, which the guard would then refuse and lose. A recipient
+ * that never answers holds the chat ("N questions waiting for a reply"), the recoverable side.
  */
 function plainQuestions(db: OrchestrationDb, addresses: readonly string[]) {
   const a = placeholders(addresses)
-  const unanswered = (asker: 'to_handle' | 'from_handle', extra: string, answered: string) =>
+  const unanswered = (asker: 'to_handle' | 'from_handle', extra: string, backTo: string) =>
     count(
       db,
       `SELECT COUNT(*) AS n FROM messages m
@@ -99,25 +103,17 @@ function plainQuestions(db: OrchestrationDb, addresses: readonly string[]) {
          AND NOT EXISTS (SELECT 1 FROM bot_requests r WHERE r.message_id = m.id)
          AND NOT EXISTS (
            SELECT 1 FROM messages x
-            WHERE x.sequence > m.sequence AND x.type <> 'question' AND ${answered}
+            WHERE (x.thread_id = m.id OR (m.thread_id IS NOT NULL AND x.thread_id = m.thread_id))
+              AND x.sequence > m.sequence AND x.type IN ${ANSWER_TYPES}
+              AND x.from_handle = m.to_handle AND ${backTo}
          )`,
-      [...addresses, ...addresses]
+      backTo.includes('?') ? [...addresses, ...addresses] : addresses
     )
-  const inThread = 'x.thread_id = COALESCE(m.thread_id, m.id)'
-  const unthreaded = 'x.thread_id IS NULL'
   return {
-    // Asked of the chat: answered by any of its addresses, in the thread or back to the asker.
-    askedOf: unanswered(
-      'to_handle',
-      'AND m.read = 1',
-      `x.from_handle IN (${a}) AND (${inThread} OR (${unthreaded} AND x.to_handle = m.from_handle))`
-    ),
-    // Asked by the chat: answered by the one it asked, in the thread or back to any of its addresses.
-    askedBy: unanswered(
-      'from_handle',
-      "AND m.type <> 'heartbeat'",
-      `x.from_handle = m.to_handle AND (${inThread} OR (${unthreaded} AND x.to_handle IN (${a})))`
-    )
+    // Asked of the chat: the address it was asked at answers, back to the asker.
+    askedOf: unanswered('to_handle', 'AND m.read = 1', 'x.to_handle = m.from_handle'),
+    // Asked by the chat: the one it asked answers, back to any address of the chat.
+    askedBy: unanswered('from_handle', "AND m.type <> 'heartbeat'", `x.to_handle IN (${a})`)
   }
 }
 

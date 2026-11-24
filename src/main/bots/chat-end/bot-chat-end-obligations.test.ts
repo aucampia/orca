@@ -206,26 +206,112 @@ describe('orchestration a side chat took part in', () => {
     expect(owes()).toEqual([])
   })
 
-  it('takes a new unthreaded message straight back, from any address of the chat, as the answer', () => {
+  it('takes no unrelated mail from the other side as the answer: a status, a heartbeat', () => {
     const me = formatOrcaSessionAddress(CHAT)
-    const earlier = formatOrcaSessionAddress(EARLIER)
+    const sent = db.insertMessage({
+      from: me,
+      to: 'term_peer',
+      subject: 'Which?',
+      type: 'question'
+    })
+    db.insertMessage({ from: 'term_peer', to: me, subject: 'Build is green' })
+    db.insertMessage({
+      from: 'term_peer',
+      to: me,
+      subject: 'alive',
+      type: 'heartbeat',
+      threadId: sent.id
+    })
+    db.markAsRead(db.getUndeliveredUnreadMessages(me, undefined, {}).map((m) => m.id))
+    expect(owes()).toEqual([{ kind: 'questions', count: 1 }])
+  })
+
+  it('lets one message answer only the question it replies to, and an unrelated one none', () => {
+    const me = formatOrcaSessionAddress(CHAT)
+    const first = db.insertMessage({
+      from: me,
+      to: 'term_peer',
+      subject: 'Which?',
+      type: 'question'
+    })
+    db.insertMessage({ from: me, to: 'term_peer', subject: 'When?', type: 'question' })
+    const unrelated = db.insertMessage({
+      from: 'term_peer',
+      to: me,
+      subject: 'Done with the other task'
+    })
+    db.markAsRead([unrelated.id])
+    expect(owes()).toEqual([{ kind: 'questions', count: 2 }])
+
+    const reply = db.insertMessage({ from: 'term_peer', to: me, subject: 'Re', threadId: first.id })
+    db.markAsRead([reply.id])
+    expect(owes()).toEqual([{ kind: 'questions', count: 1 }])
+  })
+
+  it('takes a reply to its id as the answer, for a question asked inside a thread', () => {
+    const me = formatOrcaSessionAddress(CHAT)
+    const root = db.insertMessage({ from: me, to: 'term_peer', subject: 'Plan' })
+    const asked = db.insertMessage({
+      from: me,
+      to: 'term_peer',
+      subject: 'Which day?',
+      type: 'question',
+      threadId: root.id
+    })
+    expect(owes()).toEqual([{ kind: 'questions', count: 1 }])
+    const reply = db.insertMessage({
+      from: 'term_peer',
+      to: me,
+      subject: 'Friday',
+      threadId: asked.id
+    })
+    db.markAsRead([reply.id])
+    expect(owes()).toEqual([])
+  })
+
+  it('takes no message in the thread to a third party as the answer, either way', () => {
+    const me = formatOrcaSessionAddress(CHAT)
     const asked = db.insertMessage({
       from: 'term_peer',
-      to: earlier,
+      to: me,
       subject: 'Ready?',
       type: 'question'
     })
     db.markAsRead([asked.id])
-    db.insertMessage({ from: me, to: 'term_peer', subject: 'Which?', type: 'question' })
-    expect(owes([], [EARLIER, CHAT])).toEqual([
+    const sent = db.insertMessage({
+      from: me,
+      to: 'term_peer',
+      subject: 'Which?',
+      type: 'question'
+    })
+    db.insertMessage({ from: me, to: 'term_third', subject: 'FYI', threadId: asked.id })
+    db.insertMessage({ from: 'term_peer', to: 'term_third', subject: 'FYI', threadId: sent.id })
+    expect(owes()).toEqual([
       { kind: 'requests', count: 1 },
       { kind: 'questions', count: 1 }
     ])
+  })
 
-    // The live chat answers its predecessor's question; the peer answers to the predecessor.
-    db.insertMessage({ from: me, to: 'term_peer', subject: 'Yes' })
-    const back = db.insertMessage({ from: 'term_peer', to: earlier, subject: 'That one' })
-    db.markAsRead([back.id])
+  it("takes the other side's answer to any address of the chat, but only from the one asked", () => {
+    const me = formatOrcaSessionAddress(CHAT)
+    const earlier = formatOrcaSessionAddress(EARLIER)
+    const sent = db.insertMessage({
+      from: earlier,
+      to: 'term_peer',
+      subject: 'Which?',
+      type: 'question'
+    })
+    db.insertMessage({ from: 'term_other', to: me, subject: 'Re', threadId: sent.id })
+    db.markAsRead(db.getUndeliveredUnreadMessages(me, undefined, {}).map((m) => m.id))
+    expect(owes([], [EARLIER, CHAT])).toEqual([{ kind: 'questions', count: 1 }])
+
+    const reply = db.insertMessage({
+      from: 'term_peer',
+      to: me,
+      subject: 'That one',
+      threadId: sent.id
+    })
+    db.markAsRead([reply.id])
     expect(owes([], [EARLIER, CHAT])).toEqual([])
   })
 })
