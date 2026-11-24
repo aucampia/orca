@@ -199,4 +199,22 @@ describe('chat tab table', () => {
     expect(again).toEqual(expect.any(String))
     expect(again).not.toBe(shown)
   })
+
+  it('gives a hidden tab one showing when two publishes that open nothing new queue back to back', async () => {
+    const store = await open()
+    await store.reserveOwner(reserveRequest())
+    await store.setSessionTabVisibility('session-alpha', false, undefined, { background: true })
+
+    const named: (string | null)[] = []
+    const show = () =>
+      store.setSessionTabVisibility('session-alpha', true, undefined, {
+        keepShowing: true,
+        capture: () => named.push(store.getSessionTabShowing('session-alpha'))
+      })
+    await Promise.all([show(), show()])
+
+    expect(named).toHaveLength(2)
+    expect(named[1]).toBe(named[0])
+    expect(store.getSessionTabShowing('session-alpha')).toBe(named[0])
+  })
 })

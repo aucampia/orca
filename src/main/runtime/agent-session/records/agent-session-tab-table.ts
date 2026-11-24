@@ -245,7 +245,15 @@ export abstract class AgentSessionRecordTabs extends AgentSessionRecordPublicati
       keepShowing
     }: AgentSessionTabVisibilityOptions = {}
   ): Promise<void> {
-    const sameShowing = visible && keepShowing === true && this.isSessionTabVisible(sessionId)
+    // Decided in the write's own turn of the store queue, against the writes before it: two shows
+    // queued back to back on a hidden tab keep the one name the first gave it.
+    let sameShowing = false
+    const decide = keepShowing
+      ? () => {
+          check?.()
+          sameShowing = visible && this.isSessionTabVisible(sessionId)
+        }
+      : check
     return this.commitStoreCommand(
       {
         kind: 'tab-visibility',
@@ -257,7 +265,7 @@ export abstract class AgentSessionRecordTabs extends AgentSessionRecordPublicati
         ...(background ? { background: true } : {}),
         ...(end ? { end: true } : {})
       },
-      check
+      decide
     ).then((tab) => {
       // Before any later write's check runs: a show is a new showing even of a listed tab, unless
       // it opens nothing new; a hide in between dropped the old name, so the next read mints one.
